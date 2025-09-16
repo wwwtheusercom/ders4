@@ -1,0 +1,551 @@
+import React, { useState, useRef } from 'react';
+import { Upload, FileText, Brain, CheckCircle, XCircle, RotateCcw, Download } from 'lucide-react';
+
+const StudyQuizApp = () => {
+  const [pdfFile, setPdfFile] = useState(null);
+  const [pdfContent, setPdfContent] = useState('');
+  const [questions, setQuestions] = useState([]);
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [selectedAnswer, setSelectedAnswer] = useState(null);
+  const [showResult, setShowResult] = useState(false);
+  const [score, setScore] = useState({ correct: 0, total: 0 });
+  const [isLoading, setIsLoading] = useState(false);
+  const [numberOfQuestions, setNumberOfQuestions] = useState(5);
+  const fileInputRef = useRef(null);
+
+  // Dosya yükleme
+  const handleFileUpload = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    setPdfFile(file);
+    setIsLoading(true);
+
+    try {
+      let text = '';
+      
+      if (file.type === 'text/plain') {
+        // TXT dosyası - direkt okuma
+        text = await file.text();
+      } else if (file.type === 'application/pdf') {
+        // PDF için manuel giriş iste
+        text = prompt(`PDF dosyası seçildi: ${file.name}\n\nPDF içeriğini otomatik okumak şu anda mümkün değil. Lütfen PDF'nizdeki metni kopyalayıp buraya yapıştırın:`);
+        if (!text) {
+          setPdfFile(null);
+          setIsLoading(false);
+          return;
+        }
+      } else {
+        alert('Sadece PDF veya TXT dosyaları desteklenir.');
+        setPdfFile(null);
+        setIsLoading(false);
+        return;
+      }
+      
+      if (text.trim().length < 50) {
+        alert('İçerik çok kısa! En az 50 karakter gerekli.');
+        setPdfFile(null);
+        setIsLoading(false);
+        return;
+      }
+      
+      setPdfContent(text);
+      
+    } catch (error) {
+      console.error('Hata:', error);
+      alert('Dosya işlenirken hata oluştu.');
+      setPdfFile(null);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Sorular oluşturma
+  const generateQuestions = () => {
+    if (!pdfContent) {
+      alert('Önce bir PDF dosyası yükleyin.');
+      return;
+    }
+
+    setIsLoading(true);
+    
+    // PDF içeriğinden soru oluşturma
+    const generatedQuestions = createQuestionsFromContent(pdfContent, numberOfQuestions);
+    
+    if (generatedQuestions.length === 0) {
+      alert('PDF içeriğinden soru oluşturulamadı. İçerik çok kısa olabilir.');
+      setIsLoading(false);
+      return;
+    }
+
+    setQuestions(generatedQuestions);
+    setCurrentQuestionIndex(0);
+    setSelectedAnswer(null);
+    setShowResult(false);
+    setScore({ correct: 0, total: 0 });
+    setIsLoading(false);
+  };
+
+  // PDF içeriğinden soru oluşturma fonksiyonu
+  const createQuestionsFromContent = (content, numQuestions) => {
+    const questions = [];
+    
+    // İçeriği satırlara böl ve temizle
+    const lines = content.split('\n').filter(line => line.trim().length > 10);
+    const sentences = content.split(/[.!?]+/).filter(s => s.trim().length > 20);
+    
+    // Anahtar kelimeler ve kavramları bul
+    const keywords = extractKeywords(content);
+    const concepts = extractConcepts(content);
+    
+    // Farklı soru tipleri oluştur
+    let questionCount = 0;
+    
+    // 1. Tanım soruları
+    for (let i = 0; i < concepts.length && questionCount < numQuestions; i++) {
+      const concept = concepts[i];
+      const question = createDefinitionQuestion(concept, content, keywords);
+      if (question) {
+        questions.push(question);
+        questionCount++;
+      }
+    }
+    
+    // 2. Karşılaştırma soruları
+    if (keywords.length >= 4 && questionCount < numQuestions) {
+      const comparisonQuestion = createComparisonQuestion(keywords, content);
+      if (comparisonQuestion) {
+        questions.push(comparisonQuestion);
+        questionCount++;
+      }
+    }
+    
+    // 3. Detay soruları
+    for (let i = 0; i < sentences.length && questionCount < numQuestions; i++) {
+      const sentence = sentences[i].trim();
+      if (sentence.length > 30 && sentence.length < 200) {
+        const detailQuestion = createDetailQuestion(sentence, keywords);
+        if (detailQuestion) {
+          questions.push(detailQuestion);
+          questionCount++;
+        }
+      }
+    }
+    
+    // 4. Eğer yeterli soru oluşturulamadıysa, genel sorular ekle
+    while (questionCount < Math.min(numQuestions, 8)) {
+      const generalQuestion = createGeneralQuestion(content, keywords, questionCount);
+      if (generalQuestion) {
+        questions.push(generalQuestion);
+        questionCount++;
+      } else {
+        break;
+      }
+    }
+    
+    return questions.slice(0, numQuestions);
+  };
+
+  // Anahtar kelimeleri çıkarma
+  const extractKeywords = (text) => {
+    const words = text.toLowerCase()
+      .replace(/[^\w\sğüşıöçĞÜŞIÖÇ]/g, '')
+      .split(/\s+/)
+      .filter(word => word.length > 3);
+    
+    const frequency = {};
+    words.forEach(word => {
+      frequency[word] = (frequency[word] || 0) + 1;
+    });
+    
+    return Object.entries(frequency)
+      .filter(([word, freq]) => freq > 1)
+      .sort(([,a], [,b]) => b - a)
+      .slice(0, 20)
+      .map(([word]) => word);
+  };
+
+  // Kavramları çıkarma
+  const extractConcepts = (text) => {
+    const concepts = [];
+    const lines = text.split('\n');
+    
+    lines.forEach(line => {
+      // Başlık benzeri satırları bul
+      if (line.trim().length > 5 && line.trim().length < 50) {
+        if (line.includes(':') || /^[A-ZĞÜŞIÖÇ]/.test(line.trim())) {
+          concepts.push(line.trim().replace(':', ''));
+        }
+      }
+    });
+    
+    return concepts.slice(0, 10);
+  };
+
+  // Tanım sorusu oluşturma
+  const createDefinitionQuestion = (concept, content, keywords) => {
+    const conceptLower = concept.toLowerCase();
+    const sentences = content.split(/[.!?]+/);
+    
+    // Bu kavramla ilgili cümleyi bul
+    const relatedSentence = sentences.find(s => 
+      s.toLowerCase().includes(conceptLower) && s.trim().length > 20
+    );
+    
+    if (!relatedSentence) return null;
+    
+    // Yanlış seçenekler için diğer kavramları kullan
+    const wrongOptions = keywords
+      .filter(k => k !== conceptLower && k.length > 3)
+      .slice(0, 3);
+    
+    if (wrongOptions.length < 3) {
+      // Genel yanlış seçenekler ekle
+      const generalWrongs = ['veri tabanı', 'algoritma', 'yazılım', 'donanım', 'network', 'sistem'];
+      wrongOptions.push(...generalWrongs.slice(0, 3 - wrongOptions.length));
+    }
+    
+    const options = [...wrongOptions, concept].sort(() => Math.random() - 0.5);
+    const correctIndex = options.indexOf(concept);
+    
+    return {
+      question: `"${relatedSentence.trim().substring(0, 100)}..." ifadesi hangi kavramla ilgilidir?`,
+      options: options,
+      correct: correctIndex,
+      explanation: `Bu ifade "${concept}" kavramını açıklamaktadır.`
+    };
+  };
+
+  // Karşılaştırma sorusu oluşturma
+  const createComparisonQuestion = (keywords, content) => {
+    if (keywords.length < 4) return null;
+    
+    const selectedKeywords = keywords.slice(0, 4);
+    const correctKeyword = selectedKeywords[0];
+    
+    return {
+      question: `Aşağıdakilerden hangisi verilen metinde en sık geçen kavramdır?`,
+      options: selectedKeywords,
+      correct: 0,
+      explanation: `"${correctKeyword}" kelimesi metinde en sık geçen terimdir.`
+    };
+  };
+
+  // Detay sorusu oluşturma
+  const createDetailQuestion = (sentence, keywords) => {
+    // Cümledeki önemli kelimeyi bul
+    const sentenceWords = sentence.toLowerCase().split(/\s+/);
+    const importantWord = keywords.find(k => sentenceWords.includes(k));
+    
+    if (!importantWord) return null;
+    
+    // Soruyu oluştur
+    const questionSentence = sentence.replace(new RegExp(importantWord, 'gi'), '____');
+    
+    // Yanlış seçenekleri oluştur
+    const wrongOptions = keywords
+      .filter(k => k !== importantWord)
+      .slice(0, 3);
+    
+    if (wrongOptions.length < 3) return null;
+    
+    const options = [...wrongOptions, importantWord].sort(() => Math.random() - 0.5);
+    const correctIndex = options.indexOf(importantWord);
+    
+    return {
+      question: `Aşağıdaki cümlede boş bırakılan yere hangi kelime gelmelidir?\n\n"${questionSentence.substring(0, 150)}..."`,
+      options: options,
+      correct: correctIndex,
+      explanation: `Doğru cevap "${importantWord}"dir.`
+    };
+  };
+
+  // Genel soru oluşturma
+  const createGeneralQuestion = (content, keywords, questionIndex) => {
+    const questionTypes = [
+      {
+        question: "Bu metinle ilgili aşağıdaki ifadelerden hangisi doğrudur?",
+        getOptions: () => {
+          const mainTopic = keywords[0] || 'konu';
+          return [
+            `Metin ${mainTopic} konusunu detaylı şekilde ele alır`,
+            `Metin sadece teorik bilgiler içerir`,
+            `Metin pratik uygulamalardan bahsetmez`,
+            `Metin güncel olmayan bilgiler sunar`
+          ];
+        },
+        correct: 0,
+        explanation: "Metin ana konuyu detaylı şekilde işlemektedir."
+      },
+      {
+        question: "Metinde geçen temel kavramlar arasında hangisi yer alır?",
+        getOptions: () => keywords.slice(0, 4),
+        correct: 0,
+        explanation: `"${keywords[0]}" metinde geçen temel kavramlardan biridir.`
+      }
+    ];
+    
+    if (questionIndex < questionTypes.length) {
+      const type = questionTypes[questionIndex];
+      return {
+        question: type.question,
+        options: type.getOptions(),
+        correct: type.correct,
+        explanation: type.explanation
+      };
+    }
+    
+    return null;
+  };
+
+  // Cevap seçimi
+  const handleAnswerSelect = (answerIndex) => {
+    if (showResult) return;
+    
+    setSelectedAnswer(answerIndex);
+    setShowResult(true);
+    
+    const isCorrect = answerIndex === questions[currentQuestionIndex].correct;
+    if (isCorrect) {
+      setScore(prev => ({ ...prev, correct: prev.correct + 1 }));
+    }
+    setScore(prev => ({ ...prev, total: prev.total + 1 }));
+  };
+
+  // Sonraki soru
+  const handleNextQuestion = () => {
+    if (currentQuestionIndex < questions.length - 1) {
+      setCurrentQuestionIndex(prev => prev + 1);
+      setSelectedAnswer(null);
+      setShowResult(false);
+    }
+  };
+
+  // Quiz'i yeniden başlat
+  const resetQuiz = () => {
+    setCurrentQuestionIndex(0);
+    setSelectedAnswer(null);
+    setShowResult(false);
+    setScore({ correct: 0, total: 0 });
+  };
+
+  const currentQuestion = questions[currentQuestionIndex];
+  const isQuizComplete = currentQuestionIndex === questions.length - 1 && showResult;
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
+      <div className="max-w-4xl mx-auto">
+        <div className="text-center mb-8">
+          <h1 className="text-4xl font-bold text-gray-800 mb-2">Sınav Hazırlık Uygulaması</h1>
+          <p className="text-gray-600">PDF notlarınızdan çoktan seçmeli sorular oluşturun</p>
+        </div>
+
+        {/* PDF Yükleme Bölümü */}
+        {!pdfFile && (
+          <div className="bg-white rounded-xl shadow-lg p-8 mb-6">
+            <div className="text-center">
+              <Upload className="mx-auto h-16 w-16 text-gray-400 mb-4" />
+              <h3 className="text-xl font-semibold text-gray-800 mb-2">Ders Notlarınızı Yükleyin</h3>
+              <p className="text-gray-600 mb-4">
+                Sınav hazırlığı için ders notlarınızı yükleyin
+              </p>
+              
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6 text-left">
+                <h4 className="font-semibold text-blue-800 mb-2">📝 Kullanım Rehberi:</h4>
+                <ul className="text-sm text-blue-700 space-y-1">
+                  <li><strong>TXT Dosyası:</strong> Otomatik olarak okunur ve analiz edilir</li>
+                  <li><strong>PDF Dosyası:</strong> İçeriği kopyalayıp yapıştırmanız istenecek</li>
+                  <li><strong>Manuel Giriş:</strong> Aşağıdaki butona tıklayarak direkt metin girebilirsiniz</li>
+                </ul>
+              </div>
+              
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,.txt"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+              
+              <div className="space-y-3">
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isLoading}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-lg font-medium transition-colors flex items-center gap-2 mx-auto"
+                >
+                  <FileText className="h-5 w-5" />
+                  {isLoading ? 'Yükleniyor...' : 'Dosya Seç (PDF/TXT)'}
+                </button>
+                
+                <div className="text-gray-500">veya</div>
+                
+                <button
+                  onClick={() => {
+                    const text = prompt('Ders notlarınızı buraya yazın veya yapıştırın:\n\n(En az 50 karakter gerekli)');
+                    if (text && text.trim().length >= 50) {
+                      setPdfFile({name: 'Manuel Giriş', type: 'text/plain'});
+                      setPdfContent(text);
+                    } else if (text) {
+                      alert('Metin çok kısa! En az 50 karakter gerekli.');
+                    }
+                  }}
+                  className="bg-green-600 hover:bg-green-700 text-white px-8 py-3 rounded-lg font-medium transition-colors flex items-center gap-2 mx-auto"
+                >
+                  ✏️ Manuel Metin Gir
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* PDF Yüklendi - Soru Oluşturma */}
+        {pdfFile && questions.length === 0 && (
+          <div className="bg-white rounded-xl shadow-lg p-8 mb-6">
+            <div className="text-center">
+              <CheckCircle className="mx-auto h-12 w-12 text-green-500 mb-4" />
+              <h3 className="text-xl font-semibold text-gray-800 mb-2">PDF Başarıyla Yüklendi!</h3>
+              <p className="text-gray-600 mb-6">Dosya: {pdfFile.name}</p>
+              
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Kaç soru oluşturulsun?
+                </label>
+                <select
+                  value={numberOfQuestions}
+                  onChange={(e) => setNumberOfQuestions(Number(e.target.value))}
+                  className="border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  <option value={5}>5 Soru</option>
+                  <option value={10}>10 Soru</option>
+                  <option value={15}>15 Soru</option>
+                  <option value={20}>20 Soru</option>
+                </select>
+              </div>
+              
+              <button
+                onClick={generateQuestions}
+                disabled={isLoading}
+                className="bg-green-600 hover:bg-green-700 text-white px-8 py-3 rounded-lg font-medium transition-colors flex items-center gap-2 mx-auto"
+              >
+                <Brain className="h-5 w-5" />
+                {isLoading ? 'Sorular Hazırlanıyor...' : 'Soru Oluştur'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Quiz Bölümü */}
+        {questions.length > 0 && (
+          <div className="bg-white rounded-xl shadow-lg p-8">
+            {/* İlerleme Çubuğu */}
+            <div className="mb-6">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-sm font-medium text-gray-700">
+                  Soru {currentQuestionIndex + 1} / {questions.length}
+                </span>
+                <span className="text-sm text-gray-600">
+                  Doğru: {score.correct} / {score.total}
+                </span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2">
+                <div
+                  className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${((currentQuestionIndex + 1) / questions.length) * 100}%` }}
+                ></div>
+              </div>
+            </div>
+
+            {/* Soru */}
+            <div className="mb-8">
+              <h3 className="text-xl font-semibold text-gray-800 mb-6">
+                {currentQuestion.question}
+              </h3>
+
+              {/* Seçenekler */}
+              <div className="space-y-3">
+                {currentQuestion.options.map((option, index) => {
+                  let buttonClass = "w-full text-left p-4 border-2 rounded-lg transition-all duration-200 ";
+                  
+                  if (showResult) {
+                    if (index === currentQuestion.correct) {
+                      buttonClass += "bg-green-100 border-green-500 text-green-800";
+                    } else if (index === selectedAnswer && index !== currentQuestion.correct) {
+                      buttonClass += "bg-red-100 border-red-500 text-red-800";
+                    } else {
+                      buttonClass += "bg-gray-50 border-gray-300 text-gray-600";
+                    }
+                  } else {
+                    buttonClass += "border-gray-300 hover:border-blue-400 hover:bg-blue-50";
+                  }
+
+                  return (
+                    <button
+                      key={index}
+                      onClick={() => handleAnswerSelect(index)}
+                      disabled={showResult}
+                      className={buttonClass}
+                    >
+                      <div className="flex items-center">
+                        <span className="font-medium mr-3">
+                          {String.fromCharCode(65 + index)})
+                        </span>
+                        <span>{option}</span>
+                        {showResult && index === currentQuestion.correct && (
+                          <CheckCircle className="h-5 w-5 text-green-600 ml-auto" />
+                        )}
+                        {showResult && index === selectedAnswer && index !== currentQuestion.correct && (
+                          <XCircle className="h-5 w-5 text-red-600 ml-auto" />
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Açıklama */}
+            {showResult && (
+              <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <h4 className="font-semibold text-blue-800 mb-2">Açıklama:</h4>
+                <p className="text-blue-700">{currentQuestion.explanation}</p>
+              </div>
+            )}
+
+            {/* Kontrol Butonları */}
+            <div className="flex justify-between items-center">
+              <button
+                onClick={resetQuiz}
+                className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+              >
+                <RotateCcw className="h-4 w-4" />
+                Yeniden Başla
+              </button>
+
+              {isQuizComplete ? (
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-gray-800 mb-2">
+                    Quiz Tamamlandı! 🎉
+                  </div>
+                  <div className="text-lg text-gray-600">
+                    Skorunuz: {score.correct} / {score.total} ({Math.round((score.correct / score.total) * 100)}%)
+                  </div>
+                </div>
+              ) : (
+                showResult && (
+                  <button
+                    onClick={handleNextQuestion}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition-colors"
+                  >
+                    Sonraki Soru
+                  </button>
+                )
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default StudyQuizApp;
